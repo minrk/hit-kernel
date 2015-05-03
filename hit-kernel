@@ -24,6 +24,7 @@ from IPython.kernel import kernelspec
 pjoin = os.path.join
 
 _github_pat = re.compile(r'[^/]+/[^/]+')
+_sha_pat = re.compile(r'[0-9a-f]{7,32}')
 
 HASHSTACK_REPO = "https://github.com/hashdist/hashstack.git"
 
@@ -52,16 +53,23 @@ def _no_yaml(name):
         name = os.path.splitext(name)[0]
     return name
 
+def _get_ref_sha(repo, ref):
+    """Get a hash from a given ref on a repo"""
+    
+    if _sha_pat.match(ref):
+        return ref
+    out = check_output(['git', 'ls-remote', repo, ref])
+    return out.decode('utf8').split()[0]
 
-def generate_kernel_yaml(kernel_name, commit, file, repo=HASHSTACK_REPO):
+def generate_kernel_yaml(kernel_name, file, ref='master', repo=HASHSTACK_REPO):
     """generates kernel.yaml file
     
     Parameters
     ----------
     kernel_name: str
         The name of the kernel. The file will be created as `kernel_name.yaml`.
-    commit: str
-        The git commit of the stack repo
+    ref: str
+        The git commit of the stack repo. Can be a branch or tag name as well.
     file: str
         The name of the file in the stack repo that the kernel should use for its profile.
     repo: str, optional
@@ -77,9 +85,11 @@ def generate_kernel_yaml(kernel_name, commit, file, repo=HASHSTACK_REPO):
     
     kernel_file_name = os.path.abspath(_ensure_yaml(kernel_name))
     repo = _unabbreviate_url(repo)
+    commit = _get_ref_sha(repo, ref)
     file = _ensure_yaml(file)
     
-    print("Generating {kernel_file_name} from {repo}@{commit}[{file}]".format(**locals()))
+    commit7 = commit[:7]
+    print("Generating {kernel_file_name} from {repo}@{commit7}[{file}]".format(**locals()))
     
     extends = [{
         'name': 'hashstack',
@@ -121,7 +131,7 @@ def install_kernel(kernel_name, overwrite=False):
     try:
         ks = ksm.get_kernel_spec(spec_name)
     except KeyError:
-        print(kernel_name, ksm.find_kernel_specs())
+        pass
     else:
         if overwrite:
             shutil.rmtree(ks.resource_dir)
@@ -129,9 +139,10 @@ def install_kernel(kernel_name, overwrite=False):
             raise KernelExists("Already have kernel at %s\nRename the kernel or re-run hit-kernel with --overwrite." % ks.resource_dir)
     
     print("Registering %s with ipython" % spec_name)
-    check_call(['ipython', 'kernelspec', 'install', out, '--user'])
+    check_call(['ipython', 'kernelspec', 'install', kernel_spec_dir, '--user'])
     # remote the temp
     shutil.rmtree(kernel_spec_dir)
+    return spec_name
 
 
 def make_kernel_spec(kernel_name):
@@ -168,8 +179,9 @@ def main():
         and build a hashdist profile in kernel_name/.
     """
     )
-    p.add_argument('commit', nargs='?', type=str, help="""
+    p.add_argument('ref', nargs='?', type=str, default='master', help="""
         The git commit hash, specifying the repo version.
+        Can be a branch or tag, which will pin the kernel to the current version.
     """)
     p.add_argument('--file', type=str, default='kernel', help="""
         The name of the file in the hashstack repo to base the kernel on,
@@ -195,7 +207,7 @@ def main():
     else:
         kernel_name = _no_yaml(opts.kernel_name)
         kernel_yaml = generate_kernel_yaml(kernel_name,
-            commit=opts.commit, file=opts.file, repo=opts.repo)
+            ref=opts.ref, file=opts.file, repo=opts.repo)
         try:
             build_kernel(kernel_yaml, opts.hit_args)
         except CalledProcessError as e:
