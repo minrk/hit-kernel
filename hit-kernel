@@ -118,8 +118,10 @@ def build_kernel(kernel_file_name, hit_args=None):
 class KernelExists(Exception):
     """Exception to raise when a kernel exists."""
     def __str__(self):
-        return "Already have kernel at %s\n" \
-               "Rename the kernel or re-run hit-kernel with --overwrite." % self.args
+        return '\n'.join([
+            "Already have kernel at %s" % self.args,
+            "Rename the kernel or re-run hit-kernel with --overwrite.",
+        ])
 
 
 def install_kernel(kernel_name, overwrite=False, user=False):
