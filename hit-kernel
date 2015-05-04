@@ -145,6 +145,12 @@ def install_kernel(kernel_name, overwrite=False, user=False):
             raise KernelExists(ks.resource_dir)
     
     python = pjoin(kernel_name, 'bin', 'python')
+    try:
+        check_call([python, '-c', 'import IPython.kernel'])
+    except CalledProcessError:
+        print("%s doesn't include IPython. Installing with pip." % kernel_name)
+        check_call([python, '-m', 'pip', 'install', 'ipython[kernel]'])
+    
     print("Constructing kernelspec for %s" % python)
     out = check_output([python, __file__, kernel_name, '--in-profile'])
     kernel_spec_dir = out.decode('utf8').strip()
