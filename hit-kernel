@@ -10,6 +10,8 @@ and you must have IPython >=3 on your system as well.
 
 from __future__ import print_function
 
+__version__ = '0.1.0'
+
 import argparse
 import json
 import os
@@ -214,7 +216,8 @@ def main():
     p = argparse.ArgumentParser('hit-kernel',
         description=__doc__,
     )
-
+    
+    p.add_argument('--version', action='version', version=__version__)
     p.add_argument('kernel_name', type=str, default='my-kernel', help="""
         The name of the kernel. This will create a file called kernel_name.yaml,
         and build a hashdist profile in kernel_name/.
