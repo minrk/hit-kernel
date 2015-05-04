@@ -19,8 +19,6 @@ import sys
 import tempfile
 from subprocess import check_call, check_output, CalledProcessError
 
-from IPython.kernel import kernelspec
-
 pjoin = os.path.join
 
 _github_pat = re.compile(r'[^/]+/[^/]+')
@@ -116,18 +114,22 @@ def build_kernel(kernel_file_name, hit_args=None):
 
 
 class KernelExists(Exception):
-    pass
+    """Exception to raise when a kernel exists."""
+    def __str__(self):
+        return "Already have kernel at %s\n" \
+               "Rename the kernel or re-run hit-kernel with --overwrite." % self.args
 
 
-def install_kernel(kernel_name, overwrite=False):
+def install_kernel(kernel_name, overwrite=False, user=False):
     """Install the kernel spec where IPython/Jupyter will find it"""
-    python = pjoin(kernel_name, 'bin', 'python')
-    print("Constructing kernelspec for %s" % python)
-    out = check_output([python, __file__, kernel_name, '--in-profile'])
-    kernel_spec_dir = out.decode('utf8').strip()
-    
     spec_name = 'hashdist-%s' % kernel_name
-    ksm = kernelspec.KernelSpecManager()
+    
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager
+    except ImportError:
+        from IPython.kernel.kernelspec import KernelSpecManager
+    
+    ksm = KernelSpecManager()
     try:
         ks = ksm.get_kernel_spec(spec_name)
     except KeyError:
@@ -136,11 +138,19 @@ def install_kernel(kernel_name, overwrite=False):
         if overwrite:
             shutil.rmtree(ks.resource_dir)
         else:
-            raise KernelExists("Already have kernel at %s\nRename the kernel or re-run hit-kernel with --overwrite." % ks.resource_dir)
+            raise KernelExists(ks.resource_dir)
+    
+    python = pjoin(kernel_name, 'bin', 'python')
+    print("Constructing kernelspec for %s" % python)
+    out = check_output([python, __file__, kernel_name, '--in-profile'])
+    kernel_spec_dir = out.decode('utf8').strip()
     
     print("Registering %s with ipython" % spec_name)
-    check_call(['ipython', 'kernelspec', 'install', kernel_spec_dir, '--user'])
-    # remote the temp
+    cmd = ['ipython', 'kernelspec', 'install', kernel_spec_dir]
+    if user:
+        cmd.append('--user')
+    check_call(cmd)
+    # remove the temp dir
     shutil.rmtree(kernel_spec_dir)
     return spec_name
 
@@ -152,15 +162,46 @@ def make_kernel_spec(kernel_name):
     
     Called inside the profile.
     """
-    ksm = kernelspec.KernelSpecManager()
-    ks = ksm.get_kernel_spec('python')
-    ks.display_name = 'hashdist: %s' % kernel_name.replace('_', ' ')
+    try:
+        from ipython_kernel.kernelspec import (get_kernel_dict, RESOURCES)
+    except ImportError:
+        try:
+            from IPython.kernel import kernelspec
+        except ImportError:
+            # IPython < 3, pre kernelspec
+            spec = {
+                'argv': [sys.executable, '-m', 'IPython.kernel', '-f', '{connection_file}'],
+                'language': 'python',
+                'display_name': 'overridden below',
+            }
+            resource_dir = ''
+        else:
+            ksm = kernelspec.KernelSpecManager()
+            ks = ksm.get_kernel_spec('python')
+            spec = ks.to_dict()
+            resource_dir = ks.resource_dir
+    else:
+        # IPython >= 4
+        spec = get_kernel_dict()
+        resource_dir = RESOURCES
+    
+    spec['display_name'] = 'hashdist: %s' % kernel_name.replace('_', ' ')
+    # set PATH env
+    env = spec.setdefault('env', {})
+    env['PATH'] = os.pathsep.join([pjoin(sys.prefix, 'bin'), os.defpath])
+    
+    # stage temporary kernel directory
     td = tempfile.mkdtemp()
     kernel_dir = pjoin(td, 'hashdist-%s' % kernel_name)
-    shutil.copytree(ks.resource_dir, kernel_dir)
+    if os.path.exists(resource_dir):
+        shutil.copytree(resource_dir, kernel_dir)
+    else:
+        os.mkdir(kernel_dir)
     os.chmod(kernel_dir, 0o755)
     with open(pjoin(kernel_dir, 'kernel.json'), 'w') as f:
-        json.dump(ks.to_dict(), f, indent=1)
+        json.dump(spec, f, indent=1)
+    
+    # output the temp dir so our parent can finish installation
     print(kernel_dir)
 
 
@@ -177,11 +218,9 @@ def main():
     p.add_argument('kernel_name', type=str, default='my-kernel', help="""
         The name of the kernel. This will create a file called kernel_name.yaml,
         and build a hashdist profile in kernel_name/.
-    """
-    )
-    p.add_argument('ref', nargs='?', type=str, default='master', help="""
-        The git commit hash, specifying the repo version.
-        Can be a branch or tag, which will pin the kernel to the current version.
+    """)
+    p.add_argument('--ref', type=str, default='master', help="""
+        The git commit hash, branch, or tag specifying the repo version.
     """)
     p.add_argument('--file', type=str, default='kernel', help="""
         The name of the file in the hashstack repo to base the kernel on,
@@ -190,10 +229,12 @@ def main():
     p.add_argument('--repo', type=str, default=HASHSTACK_REPO, help="""
         The repo containing the hashstack. Default: the official hashstack repo.
     """)
+    p.add_argument('--user', action='store_true', help="""
+        Install the kernel for this user instead of system-wide.
+    """)
     p.add_argument('--overwrite', action='store_true', help="""
         Overwrite the kernel if one already exists with the same name.
     """)
-    
     p.add_argument('--in-profile', action='store_true', help="""
         Private, don't use.
     """)
@@ -213,7 +254,7 @@ def main():
         except CalledProcessError as e:
             die(e)
         try:
-            spec_name = install_kernel(kernel_name, overwrite=opts.overwrite)
+            spec_name = install_kernel(kernel_name, user=opts.user, overwrite=opts.overwrite)
         except (KernelExists, CalledProcessError) as e:
             die(e)
         print("Installed kernel %s" % spec_name)
